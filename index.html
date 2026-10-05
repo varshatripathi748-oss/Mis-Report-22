@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>Electrical & Power MIS</title>
+
+    <link rel="stylesheet" href="style.css">
+
+</head>
+
+
+<body>
+
+
+<!-- =====================================================
+     SIDEBAR
+===================================================== -->
+
+<aside class="sidebar">
+
+    <div class="menu-title">
+        MIS MENU
+    </div>
+
+
+    <a
+        href="#"
+        class="menu-item active"
+        onclick="showDashboard(); return false;"
+    >
+        🏠 Dashboard
+    </a>
+
+
+    <a
+        href="#"
+        class="menu-item"
+        onclick="showMainMeter(); return false;"
+    >
+        ⚡ Main Meter
+    </a>
+
+
+    <a
+        href="#"
+        class="menu-item"
+    >
+        ☀️ Solar
+    </a>
+
+
+    <a
+        href="#"
+        class="menu-item"
+    >
+        🔌 Power Failure
+    </a>
+
+
+    <a
+        href="#"
+        class="menu-item"
+    >
+        🛢️ DG Report
+    </a>
+
+
+    <a
+        href="#"
+        class="menu-item"
+    >
+        📊 Reports
+    </a>
+
+
+    <a
+        href="#"
+        class="menu-item"
+    >
+        📈 Graphs
+    </a>
+
+
+    <a
+        href="#"
+        class="menu-item"
+    >
+        ⚙️ Settings
+    </a>
+
+</aside>
+
+
+
+<!-- =====================================================
+     MAIN CONTENT
+===================================================== -->
+
+<main class="main-content">
+
+
+    <!-- =================================================
+         MAIN METER + CHECK METER PAGE
+    ================================================== -->
+
+    <section
+        class="main-meter-page"
+        id="mainMeterPage"
+    >
+
+
+        <div class="page-title">
+
+            <div>
+
+                <h2>
+                    ⚡ Main Meter & Check Meter
+                </h2>
+
+                <p>
+                    Daily electrical meter readings
+                </p>
+
+            </div>
+
+
+            <button
+                class="add-btn"
+                onclick="openMeterForm()"
+            >
+                + Add New Reading
+            </button>
+
+        </div>
+
+
+
+        <!-- SEARCH -->
+
+        <div class="filter-panel">
+
+            <input
+                type="text"
+                id="meterSearch"
+                placeholder="Search by date or meter..."
+            >
+
+
+            <button
+                class="filter-btn"
+                onclick="showAllMeterData()"
+            >
+                Show All
+            </button>
+
+        </div>
+
+
+
+        <!-- DATA TABLE -->
+
+        <div class="panel">
+
+
+            <div class="panel-header">
+
+                <div>
+
+                    <h3>
+                        Main Meter & Check Meter Readings
+                    </h3>
+
+                    <p>
+                        Saved electrical meter data
+                    </p>
+
+                </div>
+
+            </div>
+
+
+
+            <div class="table-container">
+
+                <table id="meterDataTable">
+
+                    <thead>
+
+                        <tr>
+
+                            <th>Date</th>
+
+                            <th>Time</th>
+
+                            <th>Meter</th>
+
+                            <th>KWH Reading</th>
+
+                            <th>KVAH Reading</th>
+
+                            <th>KVA MD</th>
+
+                            <th>Actual KWH</th>
+
+                            <th>Actual KVAH</th>
+
+                            <th>Power Factor</th>
+
+                            <th>Action</th>
+
+                        </tr>
+
+                    </thead>
+
+
+                    <tbody id="meterTableBody">
+
+                    </tbody>
+
+                </table>
+
+            </div>
+
+        </div>
+
+    </section>
+
+
+
+    <!-- =================================================
+         METER DATA ENTRY FORM
+    ================================================== -->
+
+    <section
+        class="meter-form-section"
+        id="meterFormSection"
+    >
+
+
+        <div class="form-header">
+
+            <div>
+
+                <h2>
+                    ⚡ Add Meter Reading
+                </h2>
+
+                <p>
+                    Enter Main Meter or Check Meter readings
+                </p>
+
+            </div>
+
+
+            <button
+                type="button"
+                class="close-btn"
+                onclick="closeMeterForm()"
+            >
+                ✕
+            </button>
+
+        </div>
+
+
+
+        <form id="meterForm">
+
+
+            <!-- DATE & TIME -->
+
+            <div class="form-row">
+
+
+                <div class="form-group">
+
+                    <label for="readingDate">
+                        Reading Date
+                    </label>
+
+                    <input
+                        type="date"
+                        id="readingDate"
+                        required
+                    >
+
+                </div>
+
+
+
+                <div class="form-group">
+
+                    <label for="readingTime">
+                        Reading Time
+                    </label>
+
+                    <input
+                        type="time"
+                        id="readingTime"
+                        required
+                    >
+
+                </div>
+
+            </div>
+
+
+
+            <!-- METER -->
+
+            <div class="form-row">
+
+
+                <div class="form-group">
+
+                    <label for="meterName">
+                        Meter Name
+                    </label>
+
+                    <select
+                        id="meterName"
+                        required
+                    >
+
+                        <option value="">
+                            Select Meter
+                        </option>
+
+                        <option value="Main Meter">
+                            Main Meter
+                        </option>
+
+                        <option value="Check Meter">
+                            Check Meter
+                        </option>
+
+                    </select>
+
+                </div>
+
+
+                <div class="form-group">
+
+                    <label>
+                        Reading Type
+                    </label>
+
+                    <input
+                        type="text"
+                        value="Electrical Meter Reading"
+                        readonly
+                    >
+
+                </div>
+
+            </div>
+
+
+
+            <!-- METER READINGS -->
+
+            <h3 class="form-section-title">
+                Meter Reading
+            </h3>
+
+
+            <div class="form-row">
+
+
+                <div class="form-group">
+
+                    <label for="kwhReading">
+                        KWH Reading
+                    </label>
+
+                    <input
+                        type="number"
+                        id="kwhReading"
+                        step="0.001"
+                        placeholder="Enter KWH reading"
+                        required
+                    >
+
+                </div>
+
+
+
+                <div class="form-group">
+
+                    <label for="kvahReading">
+                        KVAH Reading
+                    </label>
+
+                    <input
+                        type="number"
+                        id="kvahReading"
+                        step="0.001"
+                        placeholder="Enter KVAH reading"
+                        required
+                    >
+
+                </div>
+
+            </div>
+
+
+
+            <!-- KVA MD -->
+
+            <div class="form-row">
+
+
+                <div class="form-group">
+
+                    <label for="kvaMD">
+                        KVA Maximum Demand (KVA MD)
+                    </label>
+
+                    <input
+                        type="number"
+                        id="kvaMD"
+                        step="0.001"
+                        placeholder="Enter KVA MD"
+                        required
+                    >
+
+                </div>
+
+            </div>
+
+
+
+            <!-- CALCULATED VALUES -->
+
+            <h3 class="form-section-title">
+                Calculated Consumption
+            </h3>
+
+
+            <div class="calculation-box">
+
+
+                <div class="calculation-card">
+
+                    <span>
+                        Previous KWH
+                    </span>
+
+                    <strong id="previousKwh">
+                        --
+                    </strong>
+
+                </div>
+
+
+
+                <div class="calculation-card">
+
+                    <span>
+                        Actual KWH Consumption
+                    </span>
+
+                    <strong id="actualKwh">
+                        --
+                    </strong>
+
+                </div>
+
+
+
+                <div class="calculation-card">
+
+                    <span>
+                        Actual KVAH Consumption
+                    </span>
+
+                    <strong id="actualKvah">
+                        --
+                    </strong>
+
+                </div>
+
+
+
+                <div class="calculation-card">
+
+                    <span>
+                        Power Factor
+                    </span>
+
+                    <strong id="powerFactor">
+                        --
+                    </strong>
+
+                </div>
+
+            </div>
+
+
+
+            <!-- BUTTONS -->
+
+            <div class="form-buttons">
+
+                <button
+                    type="button"
+                    class="cancel-btn"
+                    onclick="closeMeterForm()"
+                >
+                    Cancel
+                </button>
+
+
+                <button
+                    type="submit"
+                    class="save-btn"
+                >
+                    💾 Save Reading
+                </button>
+
+            </div>
+
+        </form>
+
+    </section>
+
+
+
+    <!-- =================================================
+         DASHBOARD
+    ================================================== -->
+
+    <section id="dashboardPage">
+
+
+        <!-- PAGE TITLE -->
+
+        <div class="page-title">
+
+            <div>
+
+                <h2>
+                    Dashboard
+                </h2>
+
+                <p>
+                    Electrical & Power MIS Overview
+                </p>
+
+            </div>
+
+
+            <button
+                class="add-btn"
+                onclick="openMeterForm()"
+            >
+                + Add New Reading
+            </button>
+
+        </div>
+
+
+
+        <!-- KPI CARDS -->
+
+        <section class="cards">
+
+
+            <div class="card">
+
+                <div class="card-icon">
+                    ⚡
+                </div>
+
+                <div>
+
+                    <p>
+                        MSEB Consumption
+                    </p>
+
+                    <h3 id="msebConsumption">
+                        --
+                    </h3>
+
+                    <span>
+                        kWh
+                    </span>
+
+                </div>
+
+            </div>
+
+
+
+            <div class="card">
+
+                <div class="card-icon">
+                    ☀️
+                </div>
+
+                <div>
+
+                    <p>
+                        Solar Generation
+                    </p>
+
+                    <h3>
+                        --
+                    </h3>
+
+                    <span>
+                        kWh
+                    </span>
+
+                </div>
+
+            </div>
+
+
+
+            <div class="card">
+
+                <div class="card-icon">
+                    🔌
+                </div>
+
+                <div>
+
+                    <p>
+                        Power Failure
+                    </p>
+
+                    <h3>
+                        --
+                    </h3>
+
+                    <span>
+                        Hours
+                    </span>
+
+                </div>
+
+            </div>
+
+
+
+            <div class="card">
+
+                <div class="card-icon">
+                    🛢️
+                </div>
+
+                <div>
+
+                    <p>
+                        DG Running
+                    </p>
+
+                    <h3>
+                        --
+                    </h3>
+
+                    <span>
+                        Hours
+                    </span>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+
+        <!-- SECOND ROW -->
+
+        <section class="cards second-row">
+
+
+            <div class="small-card">
+
+                <p>
+                    Power Factor
+                </p>
+
+                <h3 id="dashboardPF">
+                    --
+                </h3>
+
+            </div>
+
+
+
+            <div class="small-card">
+
+                <p>
+                    KVA Maximum Demand
+                </p>
+
+                <h3 id="dashboardKvaMD">
+                    --
+                </h3>
+
+            </div>
+
+
+
+            <div class="small-card">
+
+                <p>
+                    Current Month
+                </p>
+
+                <h3 id="currentMonth">
+                    --
+                </h3>
+
+            </div>
+
+
+
+            <div class="small-card">
+
+                <p>
+                    Data Records
+                </p>
+
+                <h3 id="dataRecords">
+                    0
+                </h3>
+
+            </div>
+
+        </section>
+
+
+
+        <!-- GRAPH AREA -->
+
+        <section class="dashboard-grid">
+
+
+            <div class="panel large-panel">
+
+                <div class="panel-header">
+
+                    <h3>
+                        Power Consumption Trend
+                    </h3>
+
+
+                    <select id="yearSelect">
+
+                        <option value="2026">
+                            2026
+                        </option>
+
+                        <option value="2025">
+                            2025
+                        </option>
+
+                        <option value="2024">
+                            2024
+                        </option>
+
+                        <option value="2023">
+                            2023
+                        </option>
+
+                        <option value="2022">
+                            2022
+                        </option>
+
+                    </select>
+
+                </div>
+
+
+                <div class="chart-container">
+
+                    <canvas
+                        id="powerConsumptionChart"
+                    ></canvas>
+
+                </div>
+
+            </div>
+
+
+
+            <div class="panel">
+
+                <div class="panel-header">
+
+                    <h3>
+                        Solar vs MSEB
+                    </h3>
+
+                </div>
+
+
+                <div class="pie-chart-container">
+
+                    <canvas
+                        id="solarMsebChart"
+                    ></canvas>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+
+        <!-- RECENT DATA -->
+
+        <section class="panel recent-panel">
+
+
+            <div class="panel-header">
+
+                <div>
+
+                    <h3>
+                        Recent MIS Data
+                    </h3>
+
+                    <p>
+                        Latest entered readings
+                    </p>
+
+                </div>
+
+
+                <button
+                    class="view-btn"
+                    onclick="showMainMeter()"
+                >
+                    View All
+                </button>
+
+            </div>
+
+
+
+            <div class="table-container">
+
+                <table>
+
+                    <thead>
+
+                        <tr>
+
+                            <th>
+                                Date
+                            </th>
+
+                            <th>
+                                Module
+                            </th>
+
+                            <th>
+                                Reading
+                            </th>
+
+                            <th>
+                                Consumption
+                            </th>
+
+                            <th>
+                                Status
+                            </th>
+
+                        </tr>
+
+                    </thead>
+
+
+                    <tbody id="recentDataBody">
+
+                    </tbody>
+
+                </table>
+
+            </div>
+
+        </section>
+
+    </section>
+
+</main>
+
+
+
+<!-- =====================================================
+ CHART.JS
+===================================================== -->
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script src="script.js"></script>
+
+
+</body>
+
+</html>
