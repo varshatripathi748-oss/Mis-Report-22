@@ -1,9 +1,31 @@
 // =====================================================
-// LOCAL STORAGE
+// MIS DASHBOARD - GRAPHQL + MYSQL
 // =====================================================
 
-let meterData =
-    JSON.parse(localStorage.getItem("meterData")) || [];
+const API_BASE = "http://localhost:4000";
+const GRAPHQL_URL = `${API_BASE}/graphql`;
+const EXCEL_UPLOAD_URL = `${API_BASE}/api/import-excel`;
+
+
+// =====================================================
+// GLOBAL DATA
+// =====================================================
+
+let meterData = [];
+
+let dashboardData = null;
+
+let powerConsumptionChart = null;
+let solarMsebChart = null;
+
+
+// =====================================================
+// FILTER STATE
+// =====================================================
+
+let currentFromDate = "";
+let currentToDate = "";
+let currentMeterFilter = "ALL";
 
 
 // =====================================================
@@ -36,35 +58,843 @@ const meterNameInput =
 
 
 // =====================================================
+// GRAPHQL REQUEST
+// =====================================================
+
+async function graphqlRequest(query, variables = {}) {
+
+    const response = await fetch(
+        GRAPHQL_URL,
+        {
+            method: "POST",
+
+            headers: {
+                "Content-Type": "application/json"
+            },
+
+            body: JSON.stringify({
+                query,
+                variables
+            })
+        }
+    );
+
+
+    if (!response.ok) {
+
+        throw new Error(
+            `GraphQL HTTP error: ${response.status}`
+        );
+
+    }
+
+
+    const result =
+        await response.json();
+
+
+    if (result.errors && result.errors.length) {
+
+        throw new Error(
+            result.errors
+                .map(error => error.message)
+                .join("\n")
+        );
+
+    }
+
+
+    return result.data;
+
+}
+
+
+// =====================================================
+// LOAD METER DATA FROM MYSQL
+// =====================================================
+
+async function loadMeterData() {
+
+    try {
+
+        const query = `
+            query GetMeterReadings(
+                $from: String,
+                $to: String,
+                $meter: MeterFilter
+            ) {
+
+                meterReadings(
+                    from: $from,
+                    to: $to,
+                    meter: $meter
+                ) {
+
+                    id
+                    date
+                    time
+
+                    main {
+                        kwh
+                        kvah
+                        actualKwhConsumption
+                        actualKvahConsumption
+                        kvaMd
+                        actualKvaMd
+                        pfDisplay
+                        pf
+                    }
+
+                    check {
+                        kwh
+                        kvah
+                        actualKwhConsumption
+                        actualKvahConsumption
+                        kvaMd
+                        actualKvaMd
+                        pfDisplay
+                        pf
+                    }
+                }
+            }
+        `;
+
+
+        const data =
+            await graphqlRequest(
+                query,
+                {
+                    from:
+                        currentFromDate || null,
+
+                    to:
+                        currentToDate || null,
+
+                    meter:
+                        currentMeterFilter
+                }
+            );
+
+
+        meterData =
+            data.meterReadings || [];
+
+
+        displayMeterData();
+
+        updateRecentData();
+
+        updateDashboardFromGraphQL();
+
+        updatePowerChart();
+
+
+    } catch (error) {
+
+        console.error(
+            "❌ Failed to load meter data:",
+            error
+        );
+
+
+        showConnectionError(
+            error.message
+        );
+
+    }
+
+}
+
+
+// =====================================================
+// LOAD DASHBOARD FROM MYSQL
+// =====================================================
+
+async function loadDashboardData() {
+
+    try {
+
+        const query = `
+            query GetDashboard(
+                $from: String,
+                $to: String,
+                $meter: MeterFilter
+            ) {
+
+                dashboard(
+                    from: $from,
+                    to: $to,
+                    meter: $meter
+                ) {
+
+                    records
+
+                    mainKwh
+                    mainKvah
+
+                    mainActualKwh
+                    mainActualKvah
+
+                    mainKvaMd
+                    mainPf
+
+                    checkKwh
+                    checkKvah
+
+                    checkActualKwh
+                    checkActualKvah
+
+                    checkKvaMd
+                    checkPf
+                }
+            }
+        `;
+
+
+        const data =
+            await graphqlRequest(
+                query,
+                {
+                    from:
+                        currentFromDate || null,
+
+                    to:
+                        currentToDate || null,
+
+                    meter:
+                        currentMeterFilter
+                }
+            );
+
+
+        dashboardData =
+            data.dashboard;
+
+
+        updateDashboardFromGraphQL();
+
+
+    } catch (error) {
+
+        console.error(
+            "❌ Failed to load dashboard:",
+            error
+        );
+
+        showConnectionError(
+            error.message
+        );
+
+    }
+
+}
+
+
+// =====================================================
+// LOAD EVERYTHING
+// =====================================================
+
+async function loadMISData() {
+
+    await Promise.all([
+        loadMeterData(),
+        loadDashboardData()
+    ]);
+
+}
+
+
+// =====================================================
+// CONNECTION ERROR
+// =====================================================
+
+function showConnectionError(message) {
+
+    console.error(message);
+
+    const recordElement =
+        document.getElementById("dataRecords");
+
+    if (recordElement) {
+
+        recordElement.textContent =
+            "Backend Offline";
+
+    }
+
+}
+
+
+// =====================================================
+// ADD EXCEL + FILTER PANEL
+// =====================================================
+
+function createMISControls() {
+
+    const mainPage =
+        document.getElementById("mainMeterPage");
+
+
+    if (!mainPage) {
+        return;
+    }
+
+
+    if (
+        document.getElementById("misDatabaseControls")
+    ) {
+        return;
+    }
+
+
+    const controls =
+        document.createElement("div");
+
+
+    controls.id =
+        "misDatabaseControls";
+
+
+    controls.style.cssText = `
+        margin: 15px 0;
+        padding: 18px;
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: end;
+    `;
+
+
+    controls.innerHTML = `
+
+        <div style="display:flex;flex-direction:column;gap:5px;">
+            <label style="font-size:13px;font-weight:600;">
+                From Date
+            </label>
+
+            <input
+                type="date"
+                id="filterFromDate"
+                style="padding:9px;border:1px solid #d1d5db;border-radius:6px;"
+            >
+        </div>
+
+
+        <div style="display:flex;flex-direction:column;gap:5px;">
+            <label style="font-size:13px;font-weight:600;">
+                To Date
+            </label>
+
+            <input
+                type="date"
+                id="filterToDate"
+                style="padding:9px;border:1px solid #d1d5db;border-radius:6px;"
+            >
+        </div>
+
+
+        <div style="display:flex;flex-direction:column;gap:5px;">
+            <label style="font-size:13px;font-weight:600;">
+                Meter
+            </label>
+
+            <select
+                id="meterFilter"
+                style="padding:9px;border:1px solid #d1d5db;border-radius:6px;"
+            >
+                <option value="ALL">
+                    All Meters
+                </option>
+
+                <option value="MAIN">
+                    Main Meter
+                </option>
+
+                <option value="CHECK">
+                    Check Meter
+                </option>
+            </select>
+        </div>
+
+
+        <button
+            type="button"
+            id="applyMISFilter"
+            class="filter-btn"
+        >
+            🔎 Apply Filter
+        </button>
+
+
+        <button
+            type="button"
+            id="clearMISFilter"
+            class="filter-btn"
+        >
+            ↺ Clear
+        </button>
+
+
+        <div style="display:flex;flex-direction:column;gap:5px;">
+            <label style="font-size:13px;font-weight:600;">
+                Excel File
+            </label>
+
+            <input
+                type="file"
+                id="excelFileInput"
+                accept=".xlsx,.xls"
+                style="max-width:220px;"
+            >
+        </div>
+
+
+        <button
+            type="button"
+            id="uploadExcelBtn"
+            class="add-btn"
+        >
+            📥 Upload Excel
+        </button>
+
+
+        <span
+            id="excelUploadStatus"
+            style="
+                font-size:13px;
+                font-weight:600;
+            "
+        ></span>
+
+    `;
+
+
+    const filterPanel =
+        mainPage.querySelector(
+            ".filter-panel"
+        );
+
+
+    if (filterPanel) {
+
+        filterPanel.insertAdjacentElement(
+            "afterend",
+            controls
+        );
+
+    } else {
+
+        mainPage
+            .querySelector(".page-title")
+            ?.insertAdjacentElement(
+                "afterend",
+                controls
+            );
+
+    }
+
+
+    setupMISControls();
+
+}
+
+
+// =====================================================
+// SETUP FILTERS + EXCEL
+// =====================================================
+
+function setupMISControls() {
+
+    const applyButton =
+        document.getElementById(
+            "applyMISFilter"
+        );
+
+
+    const clearButton =
+        document.getElementById(
+            "clearMISFilter"
+        );
+
+
+    const meterFilter =
+        document.getElementById(
+            "meterFilter"
+        );
+
+
+    const uploadButton =
+        document.getElementById(
+            "uploadExcelBtn"
+        );
+
+
+    if (applyButton) {
+
+        applyButton.addEventListener(
+            "click",
+            applyMISFilter
+        );
+
+    }
+
+
+    if (clearButton) {
+
+        clearButton.addEventListener(
+            "click",
+            clearMISFilter
+        );
+
+    }
+
+
+    if (meterFilter) {
+
+        meterFilter.addEventListener(
+            "change",
+            () => {
+
+                currentMeterFilter =
+                    meterFilter.value;
+
+                loadMISData();
+
+            }
+        );
+
+    }
+
+
+    if (uploadButton) {
+
+        uploadButton.addEventListener(
+            "click",
+            uploadExcel
+        );
+
+    }
+
+}
+
+
+// =====================================================
+// APPLY FILTER
+// =====================================================
+
+function applyMISFilter() {
+
+    const from =
+        document.getElementById(
+            "filterFromDate"
+        )?.value || "";
+
+
+    const to =
+        document.getElementById(
+            "filterToDate"
+        )?.value || "";
+
+
+    if (
+        from &&
+        to &&
+        from > to
+    ) {
+
+        alert(
+            "From Date cannot be greater than To Date."
+        );
+
+        return;
+
+    }
+
+
+    currentFromDate =
+        from;
+
+
+    currentToDate =
+        to;
+
+
+    const meterFilter =
+        document.getElementById(
+            "meterFilter"
+        );
+
+
+    currentMeterFilter =
+        meterFilter?.value || "ALL";
+
+
+    loadMISData();
+
+}
+
+
+// =====================================================
+// CLEAR FILTER
+// =====================================================
+
+function clearMISFilter() {
+
+    const from =
+        document.getElementById(
+            "filterFromDate"
+        );
+
+
+    const to =
+        document.getElementById(
+            "filterToDate"
+        );
+
+
+    const meter =
+        document.getElementById(
+            "meterFilter"
+        );
+
+
+    if (from) {
+        from.value = "";
+    }
+
+
+    if (to) {
+        to.value = "";
+    }
+
+
+    if (meter) {
+        meter.value = "ALL";
+    }
+
+
+    currentFromDate = "";
+    currentToDate = "";
+    currentMeterFilter = "ALL";
+
+
+    loadMISData();
+
+}
+
+
+// =====================================================
+// EXCEL UPLOAD
+// =====================================================
+
+async function uploadExcel() {
+
+    const fileInput =
+        document.getElementById(
+            "excelFileInput"
+        );
+
+
+    const status =
+        document.getElementById(
+            "excelUploadStatus"
+        );
+
+
+    if (!fileInput || !fileInput.files.length) {
+
+        alert(
+            "Please select an Excel file first."
+        );
+
+        return;
+
+    }
+
+
+    const file =
+        fileInput.files[0];
+
+
+    const allowed =
+        [
+            ".xlsx",
+            ".xls"
+        ];
+
+
+    const extension =
+        file.name
+            .slice(
+                file.name.lastIndexOf(".")
+            )
+            .toLowerCase();
+
+
+    if (!allowed.includes(extension)) {
+
+        alert(
+            "Only .xlsx and .xls files are allowed."
+        );
+
+        return;
+
+    }
+
+
+    const formData =
+        new FormData();
+
+
+    formData.append(
+        "file",
+        file
+    );
+
+
+    if (status) {
+
+        status.textContent =
+            "⏳ Uploading...";
+
+    }
+
+
+    try {
+
+        const response =
+            await fetch(
+                EXCEL_UPLOAD_URL,
+                {
+                    method: "POST",
+                    body: formData
+                }
+            );
+
+
+        const result =
+            await response.json();
+
+
+        if (!response.ok || !result.success) {
+
+            throw new Error(
+                result.error ||
+                "Excel upload failed."
+            );
+
+        }
+
+
+        if (status) {
+
+            status.textContent =
+                `✅ Imported: ${result.imported}, Skipped: ${result.skipped}`;
+
+        }
+
+
+        let message =
+            `Excel import completed.\n\n` +
+            `Imported: ${result.imported}\n` +
+            `Skipped: ${result.skipped}`;
+
+
+        if (
+            result.errors &&
+            result.errors.length
+        ) {
+
+            message +=
+                `\n\nErrors: ${result.errors.length}`;
+
+        }
+
+
+        alert(message);
+
+
+        fileInput.value = "";
+
+
+        // Refresh dashboard from SQL
+
+        await loadMISData();
+
+
+    } catch (error) {
+
+        console.error(
+            "❌ Excel upload failed:",
+            error
+        );
+
+
+        if (status) {
+
+            status.textContent =
+                "❌ Upload failed";
+
+        }
+
+
+        alert(
+            `Excel upload failed.\n\n${error.message}`
+        );
+
+    }
+
+}
+
+
+// =====================================================
 // OPEN METER FORM
 // =====================================================
 
 function openMeterForm() {
 
-    // Main meter page show
-    document.getElementById("mainMeterPage").style.display =
-        "block";
+    const page =
+        document.getElementById(
+            "mainMeterPage"
+        );
 
-    // Dashboard hide
-    document.getElementById("dashboardPage").style.display =
-        "none";
 
-    // Form show
-    meterFormSection.classList.add("show");
+    const dashboard =
+        document.getElementById(
+            "dashboardPage"
+        );
 
-    // Default date and time
-    setDefaultDateTime();
 
-    // Update calculation
-    updatePreviousReading();
+    if (page) {
+        page.style.display = "block";
+    }
 
-    calculateConsumption();
 
-    // Form tak automatically scroll
-    meterFormSection.scrollIntoView({
-        behavior: "smooth",
-        block: "start"
-    });
+    if (dashboard) {
+        dashboard.style.display = "none";
+    }
+
+
+    if (meterFormSection) {
+
+        meterFormSection.classList.add(
+            "show"
+        );
+
+        setDefaultDateTime();
+
+        calculateConsumption();
+
+        meterFormSection.scrollIntoView({
+            behavior: "smooth",
+            block: "start"
+        });
+
+    }
+
 }
 
 
@@ -74,93 +904,171 @@ function openMeterForm() {
 
 function closeMeterForm() {
 
-    meterFormSection.classList.remove("show");
+    if (meterFormSection) {
+
+        meterFormSection.classList.remove(
+            "show"
+        );
+
+    }
+
 }
 
 
 // =====================================================
-// DEFAULT DATE & TIME
+// DEFAULT DATE/TIME
 // =====================================================
 
 function setDefaultDateTime() {
 
-    const now = new Date();
+    if (!readingDate || !readingTime) {
+        return;
+    }
+
+
+    const now =
+        new Date();
+
 
     const year =
         now.getFullYear();
 
+
     const month =
-        String(now.getMonth() + 1).padStart(2, "0");
+        String(
+            now.getMonth() + 1
+        ).padStart(2, "0");
+
 
     const day =
-        String(now.getDate()).padStart(2, "0");
+        String(
+            now.getDate()
+        ).padStart(2, "0");
+
 
     readingDate.value =
         `${year}-${month}-${day}`;
 
+
     readingTime.value =
         now.toTimeString().slice(0, 5);
+
 }
 
 
 // =====================================================
-// GET PREVIOUS RECORD OF SAME METER
+// GET PREVIOUS READING FROM MYSQL DATA
 // =====================================================
 
 function getPreviousRecord(meterName) {
 
-    const meterRecords =
-        meterData.filter(
-            record =>
-                record.meter === meterName
-        );
-
-    if (meterRecords.length === 0) {
+    if (!meterData.length) {
         return null;
     }
+
+
+    const meterRecords =
+        meterData.filter(
+            record => {
+
+                if (
+                    meterName === "Main Meter"
+                ) {
+
+                    return (
+                        Number(
+                            record.main?.kwh
+                        ) !== 0
+                    );
+
+                }
+
+
+                if (
+                    meterName === "Check Meter"
+                ) {
+
+                    return (
+                        Number(
+                            record.check?.kwh
+                        ) !== 0
+                    );
+
+                }
+
+
+                return false;
+
+            }
+        );
+
+
+    if (!meterRecords.length) {
+        return null;
+    }
+
 
     meterRecords.sort(
         (a, b) => {
 
-            const dateA =
-                new Date(
-                    `${a.date}T${a.time}`
-                );
-
-            const dateB =
+            return (
                 new Date(
                     `${b.date}T${b.time}`
-                );
+                ) -
 
-            return dateB - dateA;
+                new Date(
+                    `${a.date}T${a.time}`
+                )
+            );
+
         }
     );
 
+
     return meterRecords[0];
+
 }
 
 
 // =====================================================
-// GET PREVIOUS KWH
+// PREVIOUS KWH
 // =====================================================
 
 function getPreviousKwh() {
 
-    const meterName =
-        meterNameInput.value;
+    const meter =
+        meterNameInput?.value;
 
-    if (!meterName) {
+
+    if (!meter) {
         return null;
     }
 
-    const previousRecord =
-        getPreviousRecord(meterName);
 
-    if (!previousRecord) {
+    const previous =
+        getPreviousRecord(meter);
+
+
+    if (!previous) {
         return null;
     }
 
-    return Number(previousRecord.kwh);
+
+    if (
+        meter === "Main Meter"
+    ) {
+
+        return Number(
+            previous.main?.kwh || 0
+        );
+
+    }
+
+
+    return Number(
+        previous.check?.kwh || 0
+    );
+
 }
 
 
@@ -170,360 +1078,245 @@ function getPreviousKwh() {
 
 function updatePreviousReading() {
 
-    const previousKwh =
+    const previous =
         getPreviousKwh();
 
-    const previousElement =
-        document.getElementById("previousKwh");
+
+    const element =
+        document.getElementById(
+            "previousKwh"
+        );
+
+
+    if (!element) {
+        return;
+    }
+
 
     if (
-        previousKwh === null ||
-        isNaN(previousKwh)
+        previous === null ||
+        Number.isNaN(previous)
     ) {
 
-        previousElement.textContent =
+        element.textContent =
             "No Previous Data";
 
     } else {
 
-        previousElement.textContent =
-            previousKwh.toFixed(3);
+        element.textContent =
+            previous.toFixed(3);
+
     }
+
 }
 
 
 // =====================================================
-// CALCULATE CONSUMPTION
+// CALCULATE FORM VALUES
 // =====================================================
 
 function calculateConsumption() {
 
     const currentKwh =
-        parseFloat(kwhInput.value);
+        Number(
+            kwhInput?.value
+        );
+
 
     const kvaMD =
-        parseFloat(kvaMDInput.value);
+        Number(
+            kvaMDInput?.value
+        );
+
 
     const previousKwh =
         getPreviousKwh();
 
 
-    // =================================================
-    // PREVIOUS KWH
-    // =================================================
-
-    if (previousKwh === null) {
-
-        document.getElementById(
-            "previousKwh"
-        ).textContent =
-            "No Data";
-
-    } else {
-
-        document.getElementById(
-            "previousKwh"
-        ).textContent =
-            previousKwh.toFixed(3);
-    }
-
-
-    // =================================================
-    // ACTUAL KWH
-    //
-    // (Current KWH - Previous KWH) × 120
-    // =================================================
-
     let actualKwh = 0;
+
 
     if (
         previousKwh !== null &&
-        !isNaN(currentKwh)
+        Number.isFinite(currentKwh)
     ) {
 
         actualKwh =
-            (currentKwh - previousKwh) * 120;
+            (
+                currentKwh -
+                previousKwh
+            ) * 120;
+
 
         if (actualKwh < 0) {
             actualKwh = 0;
         }
+
     }
 
-
-    document.getElementById(
-        "actualKwh"
-    ).textContent =
-        actualKwh.toFixed(3);
-
-
-    // =================================================
-    // ACTUAL KVAH
-    //
-    // KVA MD × 120
-    // =================================================
 
     let actualKvah = 0;
 
-    if (!isNaN(kvaMD)) {
+
+    if (Number.isFinite(kvaMD)) {
 
         actualKvah =
             kvaMD * 120;
+
     }
 
 
-    document.getElementById(
-        "actualKvah"
-    ).textContent =
-        actualKvah.toFixed(3);
-
-
-    // =================================================
-    // POWER FACTOR
-    //
-    // Actual KWH / Actual KVAH
-    // =================================================
-
     let powerFactor = 0;
+
 
     if (actualKvah > 0) {
 
         powerFactor =
-            actualKwh / actualKvah;
+            actualKwh /
+            actualKvah;
+
     }
 
 
-    document.getElementById(
-        "powerFactor"
-    ).textContent =
-        powerFactor.toFixed(3);
+    const previousElement =
+        document.getElementById(
+            "previousKwh"
+        );
+
+
+    const actualKwhElement =
+        document.getElementById(
+            "actualKwh"
+        );
+
+
+    const actualKvahElement =
+        document.getElementById(
+            "actualKvah"
+        );
+
+
+    const pfElement =
+        document.getElementById(
+            "powerFactor"
+        );
+
+
+    if (previousElement) {
+
+        previousElement.textContent =
+            previousKwh === null
+                ? "No Data"
+                : previousKwh.toFixed(3);
+
+    }
+
+
+    if (actualKwhElement) {
+
+        actualKwhElement.textContent =
+            actualKwh.toFixed(3);
+
+    }
+
+
+    if (actualKvahElement) {
+
+        actualKvahElement.textContent =
+            actualKvah.toFixed(3);
+
+    }
+
+
+    if (pfElement) {
+
+        pfElement.textContent =
+            powerFactor.toFixed(3);
+
+    }
+
 }
 
 
 // =====================================================
-// LIVE CALCULATION
+// FORM LIVE CALCULATION
 // =====================================================
 
-kwhInput.addEventListener(
-    "input",
-    calculateConsumption
-);
+if (kwhInput) {
 
-kvahInput.addEventListener(
-    "input",
-    calculateConsumption
-);
+    kwhInput.addEventListener(
+        "input",
+        calculateConsumption
+    );
 
-kvaMDInput.addEventListener(
-    "input",
-    calculateConsumption
-);
+}
+
+
+if (kvahInput) {
+
+    kvahInput.addEventListener(
+        "input",
+        calculateConsumption
+    );
+
+}
+
+
+if (kvaMDInput) {
+
+    kvaMDInput.addEventListener(
+        "input",
+        calculateConsumption
+    );
+
+}
+
+
+if (meterNameInput) {
+
+    meterNameInput.addEventListener(
+        "change",
+        function () {
+
+            updatePreviousReading();
+
+            calculateConsumption();
+
+        }
+    );
+
+}
 
 
 // =====================================================
-// METER CHANGE
+// SAVE FORM
 // =====================================================
 
-meterNameInput.addEventListener(
-    "change",
-    function () {
+if (meterForm) {
 
-        updatePreviousReading();
+    meterForm.addEventListener(
+        "submit",
+        async function (event) {
 
-        calculateConsumption();
-    }
-);
+            event.preventDefault();
 
 
-// =====================================================
-// SAVE READING
-// =====================================================
-
-meterForm.addEventListener(
-    "submit",
-    function (event) {
-
-        event.preventDefault();
-
-
-        const date =
-            readingDate.value;
-
-        const time =
-            readingTime.value;
-
-        const meter =
-            meterNameInput.value;
-
-        const kwh =
-            parseFloat(kwhInput.value);
-
-        const kvah =
-            parseFloat(kvahInput.value);
-
-        const kvaMD =
-            parseFloat(kvaMDInput.value);
-
-
-        // =================================================
-        // VALIDATION
-        // =================================================
-
-        if (
-            !date ||
-            !time ||
-            !meter ||
-            isNaN(kwh) ||
-            isNaN(kvah) ||
-            isNaN(kvaMD)
-        ) {
+            /*
+             * Current GraphQL schema is query-only.
+             * Therefore Excel import is the SQL write path.
+             *
+             * We do NOT save this form into localStorage anymore.
+             */
 
             alert(
-                "Please enter all meter details."
+                "Manual Save is temporarily disabled.\n\n" +
+                "Please use Excel Upload to insert data into MySQL."
             );
 
-            return;
         }
+    );
 
-
-        // =================================================
-        // PREVIOUS SAME METER READING
-        // =================================================
-
-        const previousKwh =
-            getPreviousKwh();
-
-
-        // =================================================
-        // ACTUAL KWH
-        // =================================================
-
-        let actualKwh = 0;
-
-        if (previousKwh !== null) {
-
-            actualKwh =
-                (kwh - previousKwh) * 120;
-
-            if (actualKwh < 0) {
-                actualKwh = 0;
-            }
-        }
-
-
-        // =================================================
-        // ACTUAL KVAH
-        // =================================================
-
-        const actualKvah =
-            kvaMD * 120;
-
-
-        // =================================================
-        // POWER FACTOR
-        // =================================================
-
-        let powerFactor = 0;
-
-        if (actualKvah > 0) {
-
-            powerFactor =
-                actualKwh / actualKvah;
-        }
-
-
-        // =================================================
-        // CREATE RECORD
-        // =================================================
-
-        const newRecord = {
-
-            id: Date.now(),
-
-            date: date,
-
-            time: time,
-
-            meter: meter,
-
-            kwh: kwh,
-
-            kvah: kvah,
-
-            kvaMD: kvaMD,
-
-            previousKwh: previousKwh,
-
-            actualKwh: actualKwh,
-
-            actualKvah: actualKvah,
-
-            powerFactor: powerFactor
-        };
-
-
-        // =================================================
-        // SAVE DATA
-        // =================================================
-
-        meterData.push(newRecord);
-
-
-        localStorage.setItem(
-            "meterData",
-            JSON.stringify(meterData)
-        );
-
-
-        // =================================================
-        // SUCCESS MESSAGE
-        // =================================================
-
-        alert(
-            meter +
-            " reading saved successfully!"
-        );
-
-
-        // =================================================
-        // RESET FORM
-        // =================================================
-
-        meterForm.reset();
-
-
-        document.getElementById(
-            "previousKwh"
-        ).textContent = "--";
-
-        document.getElementById(
-            "actualKwh"
-        ).textContent = "--";
-
-        document.getElementById(
-            "actualKvah"
-        ).textContent = "--";
-
-        document.getElementById(
-            "powerFactor"
-        ).textContent = "--";
-
-
-        closeMeterForm();
-
-
-        // =================================================
-        // UPDATE SCREEN
-        // =================================================
-
-        updateDashboard();
-
-        updateRecentData();
-
-        displayMeterData();
-
-        updatePowerChart();
-    }
-);
+}
 
 
 // =====================================================
@@ -532,61 +1325,90 @@ meterForm.addEventListener(
 
 function showDashboard() {
 
-    document.getElementById(
-        "mainMeterPage"
-    ).style.display = "none";
+    const mainPage =
+        document.getElementById(
+            "mainMeterPage"
+        );
+
+
+    const dashboard =
+        document.getElementById(
+            "dashboardPage"
+        );
+
+
+    if (mainPage) {
+        mainPage.style.display = "none";
+    }
+
 
     closeMeterForm();
 
-    document.getElementById(
-        "dashboardPage"
-    ).style.display = "block";
 
-    updateDashboard();
+    if (dashboard) {
+        dashboard.style.display = "block";
+    }
 
-    updateRecentData();
 
-    updatePowerChart();
+    loadMISData();
+
 }
 
 
 // =====================================================
-// SHOW MAIN METER PAGE
+// SHOW MAIN METER
 // =====================================================
 
 function showMainMeter() {
 
-    document.getElementById(
-        "dashboardPage"
-    ).style.display = "none";
+    const dashboard =
+        document.getElementById(
+            "dashboardPage"
+        );
+
+
+    const mainPage =
+        document.getElementById(
+            "mainMeterPage"
+        );
+
+
+    if (dashboard) {
+        dashboard.style.display = "none";
+    }
+
 
     closeMeterForm();
 
-    document.getElementById(
-        "mainMeterPage"
-    ).style.display = "block";
 
-    displayMeterData();
+    if (mainPage) {
+        mainPage.style.display = "block";
+    }
+
+
+    loadMeterData();
+
 }
 
 
 // =====================================================
-// DISPLAY METER DATA
+// METER TABLE
 // =====================================================
 
-function displayMeterData(data = meterData) {
+function displayMeterData() {
 
     const tableBody =
         document.getElementById(
             "meterTableBody"
         );
 
+
     if (!tableBody) {
         return;
     }
 
 
-    if (data.length === 0) {
+    if (!meterData.length) {
 
         tableBody.innerHTML = `
             <tr>
@@ -595,105 +1417,231 @@ function displayMeterData(data = meterData) {
                     class="no-data"
                 >
                     No meter data available.
-                    Click "+ Add New Reading" to enter data.
                 </td>
             </tr>
         `;
 
         return;
+
     }
 
 
-    const sortedData =
-        data
-        .slice()
-        .sort(
-            (a, b) => {
+    const rows = [];
 
-                const dateA =
-                    new Date(
-                        `${a.date}T${a.time}`
-                    );
 
-                const dateB =
-                    new Date(
-                        `${b.date}T${b.time}`
-                    );
+    meterData.forEach(
+        record => {
 
-                return dateB - dateA;
+            const main =
+                record.main || {};
+
+
+            const check =
+                record.check || {};
+
+
+            if (
+                currentMeterFilter === "ALL" ||
+                currentMeterFilter === "MAIN"
+            ) {
+
+                if (
+                    Number(main.kwh) !== 0 ||
+                    Number(main.kvah) !== 0 ||
+                    Number(main.kvaMd) !== 0
+                ) {
+
+                    rows.push({
+
+                        id:
+                            record.id,
+
+                        date:
+                            record.date,
+
+                        time:
+                            record.time,
+
+                        meter:
+                            "Main Meter",
+
+                        kwh:
+                            Number(main.kwh || 0),
+
+                        kvah:
+                            Number(main.kvah || 0),
+
+                        kvaMD:
+                            Number(main.kvaMd || 0),
+
+                        actualKwh:
+                            Number(
+                                main.actualKwhConsumption || 0
+                            ),
+
+                        actualKvah:
+                            Number(
+                                main.actualKvahConsumption || 0
+                            ),
+
+                        powerFactor:
+                            Number(main.pf || 0)
+
+                    });
+
+                }
+
             }
-        );
+
+
+            if (
+                currentMeterFilter === "ALL" ||
+                currentMeterFilter === "CHECK"
+            ) {
+
+                if (
+                    Number(check.kwh) !== 0 ||
+                    Number(check.kvah) !== 0 ||
+                    Number(check.kvaMd) !== 0
+                ) {
+
+                    rows.push({
+
+                        id:
+                            record.id,
+
+                        date:
+                            record.date,
+
+                        time:
+                            record.time,
+
+                        meter:
+                            "Check Meter",
+
+                        kwh:
+                            Number(check.kwh || 0),
+
+                        kvah:
+                            Number(check.kvah || 0),
+
+                        kvaMD:
+                            Number(check.kvaMd || 0),
+
+                        actualKwh:
+                            Number(
+                                check.actualKwhConsumption || 0
+                            ),
+
+                        actualKvah:
+                            Number(
+                                check.actualKvahConsumption || 0
+                            ),
+
+                        powerFactor:
+                            Number(check.pf || 0)
+
+                    });
+
+                }
+
+            }
+
+        }
+    );
+
+
+    rows.sort(
+        (a, b) => {
+
+            return (
+                new Date(
+                    `${b.date}T${b.time}`
+                ) -
+
+                new Date(
+                    `${a.date}T${a.time}`
+                )
+            );
+
+        }
+    );
+
+
+    if (!rows.length) {
+
+        tableBody.innerHTML = `
+            <tr>
+                <td
+                    colspan="10"
+                    class="no-data"
+                >
+                    No data found for selected filter.
+                </td>
+            </tr>
+        `;
+
+        return;
+
+    }
 
 
     tableBody.innerHTML =
-        sortedData
-        .map(
-            record => {
+        rows.map(
+            row => `
 
-                return `
-                    <tr>
+                <tr>
 
-                        <td>
-                            ${record.date}
-                        </td>
+                    <td>
+                        ${escapeHtml(row.date)}
+                    </td>
 
-                        <td>
-                            ${record.time}
-                        </td>
+                    <td>
+                        ${escapeHtml(row.time)}
+                    </td>
 
-                        <td>
-                            <strong>
-                                ${record.meter}
-                            </strong>
-                        </td>
+                    <td>
+                        <strong>
+                            ${escapeHtml(row.meter)}
+                        </strong>
+                    </td>
 
-                        <td>
-                            ${Number(record.kwh).toFixed(3)}
-                        </td>
+                    <td>
+                        ${row.kwh.toFixed(3)}
+                    </td>
 
-                        <td>
-                            ${Number(record.kvah).toFixed(3)}
-                        </td>
+                    <td>
+                        ${row.kvah.toFixed(3)}
+                    </td>
 
-                        <td>
-                            ${Number(record.kvaMD).toFixed(3)}
-                        </td>
+                    <td>
+                        ${row.kvaMD.toFixed(3)}
+                    </td>
 
-                        <td>
-                            ${Number(record.actualKwh).toFixed(3)}
-                        </td>
+                    <td>
+                        ${row.actualKwh.toFixed(3)}
+                    </td>
 
-                        <td>
-                            ${Number(record.actualKvah).toFixed(3)}
-                        </td>
+                    <td>
+                        ${row.actualKvah.toFixed(3)}
+                    </td>
 
-                        <td>
-                            ${Number(record.powerFactor).toFixed(3)}
-                        </td>
+                    <td>
+                        ${row.powerFactor.toFixed(3)}
+                    </td>
 
-                        <td>
+                    <td>
+                        <span>
+                            SQL
+                        </span>
+                    </td>
 
-                            <button
-                                class="action-btn edit-btn"
-                                onclick="editMeterData(${record.id})"
-                            >
-                                Edit
-                            </button>
+                </tr>
 
-                            <button
-                                class="action-btn delete-btn"
-                                onclick="deleteMeterData(${record.id})"
-                            >
-                                Delete
-                            </button>
-
-                        </td>
-
-                    </tr>
-                `;
-            }
+            `
         )
         .join("");
+
 }
 
 
@@ -719,168 +1667,98 @@ if (meterSearch) {
                     .trim();
 
 
-            const filteredData =
-                meterData.filter(
-                    record => {
-
-                        return (
-
-                            record.date
-                                .toLowerCase()
-                                .includes(searchValue)
-
-                            ||
-
-                            record.meter
-                                .toLowerCase()
-                                .includes(searchValue)
-
-                        );
-                    }
+            const tableBody =
+                document.getElementById(
+                    "meterTableBody"
                 );
 
 
-            displayMeterData(
-                filteredData
+            if (!tableBody) {
+                return;
+            }
+
+
+            const rows =
+                tableBody.querySelectorAll(
+                    "tr"
+                );
+
+
+            rows.forEach(
+                row => {
+
+                    const text =
+                        row.textContent
+                            .toLowerCase();
+
+
+                    row.style.display =
+                        text.includes(
+                            searchValue
+                        )
+                            ? ""
+                            : "none";
+
+                }
             );
+
         }
     );
+
 }
 
 
 // =====================================================
-// SHOW ALL DATA
+// SHOW ALL
 // =====================================================
 
 function showAllMeterData() {
 
     if (meterSearch) {
-
         meterSearch.value = "";
     }
 
-    displayMeterData(meterData);
-}
+
+    currentFromDate = "";
+    currentToDate = "";
+    currentMeterFilter = "ALL";
 
 
-// =====================================================
-// DELETE DATA
-// =====================================================
-
-function deleteMeterData(id) {
-
-    const confirmDelete =
-        confirm(
-            "Are you sure you want to delete this reading?"
+    const from =
+        document.getElementById(
+            "filterFromDate"
         );
 
 
-    if (!confirmDelete) {
-        return;
+    const to =
+        document.getElementById(
+            "filterToDate"
+        );
+
+
+    const meter =
+        document.getElementById(
+            "meterFilter"
+        );
+
+
+    if (from) {
+        from.value = "";
     }
 
 
-    meterData =
-        meterData.filter(
-            record =>
-                record.id !== id
-        );
-
-
-    localStorage.setItem(
-        "meterData",
-        JSON.stringify(meterData)
-    );
-
-
-    displayMeterData();
-
-    updateDashboard();
-
-    updateRecentData();
-
-    updatePowerChart();
-
-
-    alert(
-        "Reading deleted successfully!"
-    );
-}
-
-
-// =====================================================
-// EDIT DATA
-// =====================================================
-
-function editMeterData(id) {
-
-    const record =
-        meterData.find(
-            item =>
-                item.id === id
-        );
-
-
-    if (!record) {
-        return;
+    if (to) {
+        to.value = "";
     }
 
 
-    // Main Meter page
-    showMainMeter();
+    if (meter) {
+        meter.value = "ALL";
+    }
 
 
-    // Open form
-    meterFormSection.classList.add("show");
+    loadMISData();
 
-
-    // Fill values
-
-    readingDate.value =
-        record.date;
-
-    readingTime.value =
-        record.time;
-
-    meterNameInput.value =
-        record.meter;
-
-    kwhInput.value =
-        record.kwh;
-
-    kvahInput.value =
-        record.kvah;
-
-    kvaMDInput.value =
-        record.kvaMD;
-
-
-    updatePreviousReading();
-
-    calculateConsumption();
-
-
-    // Remove old record
-    meterData =
-        meterData.filter(
-            item =>
-                item.id !== id
-        );
-
-
-    localStorage.setItem(
-        "meterData",
-        JSON.stringify(meterData)
-    );
-
-
-    meterFormSection.scrollIntoView({
-        behavior: "smooth",
-        block: "start"
-    });
-
-
-    displayMeterData();
 }
 
 
@@ -888,7 +1766,16 @@ function editMeterData(id) {
 // DASHBOARD UPDATE
 // =====================================================
 
-function updateDashboard() {
+function updateDashboardFromGraphQL() {
+
+    if (!dashboardData) {
+        return;
+    }
+
+
+    const data =
+        dashboardData;
+
 
     const recordCount =
         document.getElementById(
@@ -899,115 +1786,119 @@ function updateDashboard() {
     if (recordCount) {
 
         recordCount.textContent =
-            meterData.length;
+            data.records;
+
     }
 
 
-    if (meterData.length === 0) {
+    // -----------------------------------------------
+    // MSEB / MAIN CONSUMPTION
+    // -----------------------------------------------
 
-        document.getElementById(
-            "dashboardPF"
-        ).textContent = "--";
-
-        document.getElementById(
-            "dashboardKvaMD"
-        ).textContent = "--";
-
+    const mseb =
         document.getElementById(
             "msebConsumption"
-        ).textContent = "--";
-
-        return;
-    }
-
-
-    // Main Meter records only
-
-    const mainMeterRecords =
-        meterData.filter(
-            record =>
-                record.meter === "Main Meter"
         );
 
 
-    if (mainMeterRecords.length === 0) {
+    if (mseb) {
 
-        document.getElementById(
-            "dashboardPF"
-        ).textContent = "--";
+        mseb.textContent =
+            Number(
+                data.mainActualKwh || 0
+            ).toFixed(2);
 
-        document.getElementById(
-            "dashboardKvaMD"
-        ).textContent = "--";
-
-        document.getElementById(
-            "msebConsumption"
-        ).textContent = "0";
-
-        return;
     }
 
 
-    // Latest Main Meter record
+    // -----------------------------------------------
+    // POWER FACTOR
+    // -----------------------------------------------
 
-    const lastRecord =
-        mainMeterRecords
-        .slice()
-        .sort(
-            (a, b) => {
-
-                return new Date(
-                    `${b.date}T${b.time}`
-                ) -
-                new Date(
-                    `${a.date}T${a.time}`
-                );
-            }
-        )[0];
+    const pf =
+        document.getElementById(
+            "dashboardPF"
+        );
 
 
-    // Power Factor
+    if (pf) {
 
-    document.getElementById(
-        "dashboardPF"
-    ).textContent =
-        Number(
-            lastRecord.powerFactor
-        ).toFixed(3);
+        const pfValue =
+            currentMeterFilter === "CHECK"
+                ? data.checkPf
+                : data.mainPf;
 
 
+        pf.textContent =
+            Number(
+                pfValue || 0
+            ).toFixed(3);
+
+    }
+
+
+    // -----------------------------------------------
     // KVA MD
+    // -----------------------------------------------
 
-    document.getElementById(
-        "dashboardKvaMD"
-    ).textContent =
-        Number(
-            lastRecord.kvaMD
-        ).toFixed(3);
-
-
-    // Total Main Meter consumption
-
-    const totalConsumption =
-        mainMeterRecords.reduce(
-            (
-                total,
-                record
-            ) => {
-
-                return total +
-                    Number(
-                        record.actualKwh
-                    );
-            },
-            0
+    const kvaMD =
+        document.getElementById(
+            "dashboardKvaMD"
         );
 
 
-    document.getElementById(
-        "msebConsumption"
-    ).textContent =
-        totalConsumption.toFixed(2);
+    if (kvaMD) {
+
+        const kvaValue =
+            currentMeterFilter === "CHECK"
+                ? data.checkKvaMd
+                : data.mainKvaMd;
+
+
+        kvaMD.textContent =
+            Number(
+                kvaValue || 0
+            ).toFixed(3);
+
+    }
+
+
+    // -----------------------------------------------
+    // CURRENT MONTH / FILTER
+    // -----------------------------------------------
+
+    const month =
+        document.getElementById(
+            "currentMonth"
+        );
+
+
+    if (month) {
+
+        if (
+            currentFromDate ||
+            currentToDate
+        ) {
+
+            month.textContent =
+                "Filtered";
+
+        } else {
+
+            month.textContent =
+                new Date()
+                    .toLocaleDateString(
+                        "en-IN",
+                        {
+                            month: "long",
+                            year: "numeric"
+                        }
+                    );
+
+        }
+
+    }
+
 }
 
 
@@ -1028,98 +1919,156 @@ function updateRecentData() {
     }
 
 
-    if (meterData.length === 0) {
+    const rows = [];
+
+
+    meterData.forEach(
+        record => {
+
+            const main =
+                record.main || {};
+
+
+            const check =
+                record.check || {};
+
+
+            if (
+                Number(main.kwh) !== 0 ||
+                Number(main.kvah) !== 0
+            ) {
+
+                rows.push({
+
+                    date:
+                        record.date,
+
+                    meter:
+                        "Main Meter",
+
+                    reading:
+                        Number(
+                            main.kwh || 0
+                        ),
+
+                    consumption:
+                        Number(
+                            main.actualKwhConsumption || 0
+                        )
+
+                });
+
+            }
+
+
+            if (
+                Number(check.kwh) !== 0 ||
+                Number(check.kvah) !== 0
+            ) {
+
+                rows.push({
+
+                    date:
+                        record.date,
+
+                    meter:
+                        "Check Meter",
+
+                    reading:
+                        Number(
+                            check.kwh || 0
+                        ),
+
+                    consumption:
+                        Number(
+                            check.actualKwhConsumption || 0
+                        )
+
+                });
+
+            }
+
+        }
+    );
+
+
+    rows.sort(
+        (a, b) =>
+            new Date(b.date) -
+            new Date(a.date)
+    );
+
+
+    const recent =
+        rows.slice(0, 5);
+
+
+    if (!recent.length) {
 
         tableBody.innerHTML = `
             <tr>
-
                 <td>--</td>
-
                 <td>--</td>
-
                 <td>--</td>
-
                 <td>--</td>
-
                 <td>No Data</td>
-
             </tr>
         `;
 
         return;
+
     }
 
 
-    const recentRecords =
-        meterData
-        .slice()
-        .sort(
-            (a, b) => {
-
-                return new Date(
-                    `${b.date}T${b.time}`
-                ) -
-                new Date(
-                    `${a.date}T${a.time}`
-                );
-            }
-        )
-        .slice(0, 5);
-
-
     tableBody.innerHTML =
-        recentRecords
-        .map(
-            record => {
+        recent.map(
+            row => `
 
-                return `
-                    <tr>
+                <tr>
 
-                        <td>
-                            ${record.date}
-                        </td>
+                    <td>
+                        ${escapeHtml(row.date)}
+                    </td>
 
-                        <td>
-                            ${record.meter}
-                        </td>
+                    <td>
+                        ${escapeHtml(row.meter)}
+                    </td>
 
-                        <td>
-                            ${Number(record.kwh).toFixed(3)}
-                            kWh
-                        </td>
+                    <td>
+                        ${row.reading.toFixed(3)}
+                        kWh
+                    </td>
 
-                        <td>
-                            ${Number(record.actualKwh).toFixed(3)}
-                            kWh
-                        </td>
+                    <td>
+                        ${row.consumption.toFixed(3)}
+                        kWh
+                    </td>
 
-                        <td>
-                            <span
-                                style="
-                                    background:#dcfce7;
-                                    color:#166534;
-                                    padding:5px 9px;
-                                    border-radius:5px;
-                                "
-                            >
-                                Saved
-                            </span>
-                        </td>
+                    <td>
+                        <span
+                            style="
+                                background:#dcfce7;
+                                color:#166534;
+                                padding:5px 9px;
+                                border-radius:5px;
+                            "
+                        >
+                            SQL
+                        </span>
+                    </td>
 
-                    </tr>
-                `;
-            }
+                </tr>
+
+            `
         )
         .join("");
+
 }
 
 
 // =====================================================
 // POWER CONSUMPTION CHART
 // =====================================================
-
-let powerConsumptionChart = null;
-
 
 function updatePowerChart() {
 
@@ -1129,12 +2078,8 @@ function updatePowerChart() {
         );
 
 
-    if (!canvas) {
-        return;
-    }
-
-
     if (
+        !canvas ||
         typeof Chart === "undefined"
     ) {
         return;
@@ -1145,31 +2090,63 @@ function updatePowerChart() {
         Array(12).fill(0);
 
 
-    meterData
-        .filter(
-            record =>
-                record.meter === "Main Meter"
-        )
-        .forEach(
-            record => {
+    meterData.forEach(
+        record => {
 
-                const date =
-                    new Date(record.date);
+            const date =
+                new Date(record.date);
 
-                const month =
-                    date.getMonth();
 
-                monthlyData[month] +=
-                    Number(
-                        record.actualKwh
-                    );
+            if (
+                Number.isNaN(
+                    date.getTime()
+                )
+            ) {
+                return;
             }
-        );
+
+
+            const month =
+                date.getMonth();
+
+
+            let consumption = 0;
+
+
+            if (
+                currentMeterFilter === "CHECK"
+            ) {
+
+                consumption =
+                    Number(
+                        record.check
+                            ?.actualKwhConsumption ||
+                        0
+                    );
+
+            } else {
+
+                consumption =
+                    Number(
+                        record.main
+                            ?.actualKwhConsumption ||
+                        0
+                    );
+
+            }
+
+
+            monthlyData[month] +=
+                consumption;
+
+        }
+    );
 
 
     if (powerConsumptionChart) {
 
         powerConsumptionChart.destroy();
+
     }
 
 
@@ -1200,8 +2177,11 @@ function updatePowerChart() {
                     datasets: [
 
                         {
+
                             label:
-                                "MSEB Consumption (kWh)",
+                                currentMeterFilter === "CHECK"
+                                    ? "Check Meter Consumption"
+                                    : "Main Meter Consumption",
 
                             data:
                                 monthlyData,
@@ -1209,9 +2189,11 @@ function updatePowerChart() {
                             borderWidth: 2,
 
                             tension: 0.3
+
                         }
 
                     ]
+
                 },
 
                 options: {
@@ -1221,17 +2203,16 @@ function updatePowerChart() {
                     maintainAspectRatio: false
 
                 }
+
             }
         );
+
 }
 
 
 // =====================================================
-// SOLAR VS MSEB CHART
+// SOLAR VS MSEB
 // =====================================================
-
-let solarMsebChart = null;
-
 
 function createSolarChart() {
 
@@ -1241,12 +2222,8 @@ function createSolarChart() {
         );
 
 
-    if (!canvas) {
-        return;
-    }
-
-
     if (
+        !canvas ||
         typeof Chart === "undefined"
     ) {
         return;
@@ -1256,7 +2233,14 @@ function createSolarChart() {
     if (solarMsebChart) {
 
         solarMsebChart.destroy();
+
     }
+
+
+    const mseb =
+        Number(
+            dashboardData?.mainActualKwh || 0
+        );
 
 
     solarMsebChart =
@@ -1276,15 +2260,18 @@ function createSolarChart() {
                     datasets: [
 
                         {
+
                             data: [
-                                100,
+                                mseb,
                                 0
                             ],
 
                             borderWidth: 1
+
                         }
 
                     ]
+
                 },
 
                 options: {
@@ -1294,8 +2281,41 @@ function createSolarChart() {
                     maintainAspectRatio: false
 
                 }
+
             }
         );
+
+}
+
+
+// =====================================================
+// SAFE HTML
+// =====================================================
+
+function escapeHtml(value) {
+
+    return String(value ?? "")
+        .replace(
+            /&/g,
+            "&amp;"
+        )
+        .replace(
+            /</g,
+            "&lt;"
+        )
+        .replace(
+            />/g,
+            "&gt;"
+        )
+        .replace(
+            /"/g,
+            "&quot;"
+        )
+        .replace(
+            /'/g,
+            "&#039;"
+        );
+
 }
 
 
@@ -1305,59 +2325,57 @@ function createSolarChart() {
 
 document.addEventListener(
     "DOMContentLoaded",
-    function () {
+    async function () {
 
-        // Initially Dashboard show
-        document.getElementById(
-            "dashboardPage"
-        ).style.display = "block";
+        // Dashboard visible initially
 
-
-        // Main Meter hide
-        document.getElementById(
-            "mainMeterPage"
-        ).style.display = "none";
-
-
-        // Form hide
-        closeMeterForm();
-
-
-        // Date & time
-        setDefaultDateTime();
-
-
-        // Dashboard
-        updateDashboard();
-
-        updateRecentData();
-
-        updatePowerChart();
-
-        createSolarChart();
-
-
-        // Meter table
-        displayMeterData();
-
-
-        // Current month
-        const monthElement =
+        const dashboard =
             document.getElementById(
-                "currentMonth"
+                "dashboardPage"
             );
 
 
-        if (monthElement) {
+        const mainPage =
+            document.getElementById(
+                "mainMeterPage"
+            );
 
-            monthElement.textContent =
-                new Date().toLocaleDateString(
-                    "en-IN",
-                    {
-                        month: "long",
-                        year: "numeric"
-                    }
-                );
+
+        if (dashboard) {
+
+            dashboard.style.display =
+                "block";
+
         }
+
+
+        if (mainPage) {
+
+            mainPage.style.display =
+                "none";
+
+        }
+
+
+        closeMeterForm();
+
+
+        setDefaultDateTime();
+
+
+        // Add Excel + filter controls
+
+        createMISControls();
+
+
+        // Load SQL data
+
+        await loadMISData();
+
+
+        // Solar chart
+
+        createSolarChart();
+
     }
 );
