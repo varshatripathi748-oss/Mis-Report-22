@@ -1,299 +1,553 @@
 const pool = require("./db");
 
+
+// ========================================
+// HELPER FUNCTIONS
+// ========================================
+
+function num(value) {
+    if (value === null || value === undefined || value === "") {
+        return 0;
+    }
+
+    const n = Number(value);
+
+    return Number.isFinite(n) ? n : 0;
+}
+
+
+function formatDate(value) {
+
+    if (!value) {
+        return null;
+    }
+
+    if (typeof value === "string") {
+        return value.slice(0, 10);
+    }
+
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+        return null;
+    }
+
+    return date.toISOString().slice(0, 10);
+}
+
+
+function formatTime(value) {
+
+    if (!value) {
+        return null;
+    }
+
+    if (typeof value === "string") {
+
+        if (value.length === 5) {
+            return `${value}:00`;
+        }
+
+        return value;
+    }
+
+    return String(value);
+}
+
+
+// ========================================
+// DATABASE ROW → GRAPHQL OBJECT
+// ========================================
+
+function mapRow(row) {
+
+    return {
+
+        id: row.id,
+
+        date: formatDate(row.reading_date),
+
+        time: formatTime(row.reading_time),
+
+
+        // --------------------------------
+        // MAIN METER
+        // --------------------------------
+
+        main: {
+
+            kwh: num(row.main_kwh),
+
+            kvah: num(row.main_kvah),
+
+            actualKwhConsumption:
+                num(row.main_actual_kwh_consumption),
+
+            actualKvahConsumption:
+                num(row.main_actual_kvah_consumption),
+
+            kvaMd:
+                num(row.main_kva_md),
+
+            actualKvaMd:
+                num(row.main_actual_kva_md),
+
+            pfDisplay:
+                num(row.main_pf_display),
+
+            pf:
+                num(row.main_pf)
+
+        },
+
+
+        // --------------------------------
+        // CHECK METER
+        // --------------------------------
+
+        check: {
+
+            kwh: num(row.check_kwh),
+
+            kvah: num(row.check_kvah),
+
+            actualKwhConsumption:
+                num(row.check_actual_kwh_consumption),
+
+            actualKvahConsumption:
+                num(row.check_actual_kvah_consumption),
+
+            kvaMd:
+                num(row.check_kva_md),
+
+            actualKvaMd:
+                num(row.check_actual_kva_md),
+
+            pfDisplay:
+                num(row.check_pf_display),
+
+            pf:
+                num(row.check_pf)
+
+        },
+
+
+        createdAt:
+            row.created_at
+                ? new Date(row.created_at).toISOString()
+                : null,
+
+        updatedAt:
+            row.updated_at
+                ? new Date(row.updated_at).toISOString()
+                : null
+
+    };
+}
+
+
+// ========================================
+// DATE FILTER
+// ========================================
+
+function buildDateFilter(from, to) {
+
+    const conditions = [];
+
+    const params = [];
+
+
+    if (from) {
+
+        conditions.push(
+            "reading_date >= ?"
+        );
+
+        params.push(from);
+
+    }
+
+
+    if (to) {
+
+        conditions.push(
+            "reading_date <= ?"
+        );
+
+        params.push(to);
+
+    }
+
+
+    return {
+
+        sql:
+            conditions.length > 0
+                ? `WHERE ${conditions.join(" AND ")}`
+                : "",
+
+        params
+
+    };
+
+}
+
+
+// ========================================
+// GET DATABASE ROWS
+// ========================================
+
+async function getRows(from, to) {
+
+    const filter =
+        buildDateFilter(from, to);
+
+
+    const [rows] =
+        await pool.query(
+
+            `
+            SELECT *
+            FROM meter_readings
+
+            ${filter.sql}
+
+            ORDER BY
+                reading_date DESC,
+                reading_time DESC,
+                id DESC
+            `,
+
+            filter.params
+
+        );
+
+
+    return rows;
+
+}
+
+
+// ========================================
+// CHECK WHETHER MAIN METER HAS DATA
+// ========================================
+
+function hasMainData(row) {
+
+    return (
+
+        num(row.main_kwh) !== 0 ||
+
+        num(row.main_kvah) !== 0 ||
+
+        num(row.main_kva_md) !== 0 ||
+
+        num(row.main_actual_kwh_consumption) !== 0 ||
+
+        num(row.main_actual_kvah_consumption) !== 0
+
+    );
+
+}
+
+
+// ========================================
+// CHECK WHETHER CHECK METER HAS DATA
+// ========================================
+
+function hasCheckData(row) {
+
+    return (
+
+        num(row.check_kwh) !== 0 ||
+
+        num(row.check_kvah) !== 0 ||
+
+        num(row.check_kva_md) !== 0 ||
+
+        num(row.check_actual_kwh_consumption) !== 0 ||
+
+        num(row.check_actual_kvah_consumption) !== 0
+
+    );
+
+}
+
+
+// ========================================
+// FILTER ROWS BY METER
+// ========================================
+
+function filterByMeter(rows, meter) {
+
+    if (meter === "MAIN") {
+
+        return rows.filter(hasMainData);
+
+    }
+
+
+    if (meter === "CHECK") {
+
+        return rows.filter(hasCheckData);
+
+    }
+
+
+    return rows;
+
+}
+
+
+// ========================================
+// SUM
+// ========================================
+
+function sum(rows, getter) {
+
+    return rows.reduce(
+
+        (total, row) => {
+
+            return total + num(getter(row));
+
+        },
+
+        0
+
+    );
+
+}
+
+
+// ========================================
+// AVERAGE
+// ========================================
+
+function average(rows, getter) {
+
+    if (rows.length === 0) {
+        return 0;
+    }
+
+
+    return (
+        sum(rows, getter) /
+        rows.length
+    );
+
+}
+
+
+// ========================================
+// GRAPHQL RESOLVERS
+// ========================================
+
 const resolvers = {
 
-    // =========================
-    // GET ALL METER READINGS
-    // =========================
-    meterReadings: async () => {
 
-        const [rows] = await pool.query(`
-            SELECT
-                id,
-                reading_date,
-                reading_time,
-                meter,
-                kwh,
-                kvah,
-                kva_md,
-                previous_kwh,
-                actual_kwh,
-                actual_kvah,
-                power_factor
-            FROM meter_readings
-            ORDER BY reading_date DESC, reading_time DESC
-        `);
+    // ====================================
+    // METER READINGS
+    // ====================================
 
-        return rows.map(row => ({
-            id: row.id,
-            date: row.reading_date.toISOString().split("T")[0],
-            time: row.reading_time,
-            meter: row.meter,
-            kwh: Number(row.kwh),
-            kvah: Number(row.kvah),
-            kvaMD: Number(row.kva_md),
-            previousKwh: row.previous_kwh === null
-                ? null
-                : Number(row.previous_kwh),
-            actualKwh: Number(row.actual_kwh),
-            actualKvah: Number(row.actual_kvah),
-            powerFactor: Number(row.power_factor)
-        }));
+    meterReadings: async ({
+        from,
+        to,
+        meter
+    }) => {
+
+        const rows =
+            await getRows(from, to);
+
+
+        const filteredRows =
+            filterByMeter(rows, meter);
+
+
+        return filteredRows.map(
+            mapRow
+        );
+
     },
 
 
-    // =========================
-    // GET SINGLE READING
-    // =========================
-    meterReading: async ({ id }) => {
+    // ====================================
+    // DASHBOARD
+    // ====================================
 
-        const [rows] = await pool.query(`
-            SELECT
-                id,
-                reading_date,
-                reading_time,
-                meter,
-                kwh,
-                kvah,
-                kva_md,
-                previous_kwh,
-                actual_kwh,
-                actual_kvah,
-                power_factor
-            FROM meter_readings
-            WHERE id = ?
-        `, [id]);
+    dashboard: async ({
+        from,
+        to,
+        meter
+    }) => {
 
-        if (rows.length === 0) {
-            return null;
-        }
+        const rows =
+            await getRows(from, to);
 
-        const row = rows[0];
+
+        const selectedRows =
+            filterByMeter(rows, meter);
+
+
+        // --------------------------------
+        // MAIN DATA
+        // --------------------------------
+
+        const mainKwh =
+            sum(
+                selectedRows,
+                row => row.main_kwh
+            );
+
+
+        const mainKvah =
+            sum(
+                selectedRows,
+                row => row.main_kvah
+            );
+
+
+        const mainActualKwh =
+            sum(
+                selectedRows,
+                row =>
+                    row.main_actual_kwh_consumption
+            );
+
+
+        const mainActualKvah =
+            sum(
+                selectedRows,
+                row =>
+                    row.main_actual_kvah_consumption
+            );
+
+
+        const mainKvaMd =
+            selectedRows.length > 0
+
+                ? Math.max(
+                    ...selectedRows.map(
+                        row =>
+                            num(row.main_kva_md)
+                    )
+                )
+
+                : 0;
+
+
+        const mainPfRows =
+            selectedRows.filter(
+                row =>
+                    num(row.main_pf) > 0
+            );
+
+
+        const mainPf =
+            average(
+                mainPfRows,
+                row => row.main_pf
+            );
+
+
+        // --------------------------------
+        // CHECK DATA
+        // --------------------------------
+
+        const checkKwh =
+            sum(
+                selectedRows,
+                row => row.check_kwh
+            );
+
+
+        const checkKvah =
+            sum(
+                selectedRows,
+                row => row.check_kvah
+            );
+
+
+        const checkActualKwh =
+            sum(
+                selectedRows,
+                row =>
+                    row.check_actual_kwh_consumption
+            );
+
+
+        const checkActualKvah =
+            sum(
+                selectedRows,
+                row =>
+                    row.check_actual_kvah_consumption
+            );
+
+
+        const checkKvaMd =
+            selectedRows.length > 0
+
+                ? Math.max(
+                    ...selectedRows.map(
+                        row =>
+                            num(row.check_kva_md)
+                    )
+                )
+
+                : 0;
+
+
+        const checkPfRows =
+            selectedRows.filter(
+                row =>
+                    num(row.check_pf) > 0
+            );
+
+
+        const checkPf =
+            average(
+                checkPfRows,
+                row => row.check_pf
+            );
+
+
+        // --------------------------------
+        // RETURN DASHBOARD DATA
+        // --------------------------------
 
         return {
-            id: row.id,
-            date: row.reading_date.toISOString().split("T")[0],
-            time: row.reading_time,
-            meter: row.meter,
-            kwh: Number(row.kwh),
-            kvah: Number(row.kvah),
-            kvaMD: Number(row.kva_md),
-            previousKwh: row.previous_kwh === null
-                ? null
-                : Number(row.previous_kwh),
-            actualKwh: Number(row.actual_kwh),
-            actualKvah: Number(row.actual_kvah),
-            powerFactor: Number(row.power_factor)
+
+            records:
+                selectedRows.length,
+
+            mainKwh,
+
+            mainKvah,
+
+            mainActualKwh,
+
+            mainActualKvah,
+
+            mainKvaMd,
+
+            mainPf,
+
+            checkKwh,
+
+            checkKvah,
+
+            checkActualKwh,
+
+            checkActualKvah,
+
+            checkKvaMd,
+
+            checkPf
+
         };
-    },
 
-
-    // =========================
-    // ADD METER READING
-    // =========================
-    addMeterReading: async ({ input }) => {
-
-        const {
-            date,
-            time,
-            meter,
-            kwh,
-            kvah,
-            kvaMD
-        } = input;
-
-
-        // Find previous reading of the same meter
-        const [previousRows] = await pool.query(`
-            SELECT kwh
-            FROM meter_readings
-            WHERE meter = ?
-            ORDER BY reading_date DESC, reading_time DESC
-            LIMIT 1
-        `, [meter]);
-
-
-        let previousKwh = null;
-        let actualKwh = 0;
-
-
-        if (previousRows.length > 0) {
-
-            previousKwh = Number(previousRows[0].kwh);
-
-            actualKwh = (Number(kwh) - previousKwh) * 120;
-
-            // Same logic as your existing frontend
-            if (actualKwh < 0) {
-                actualKwh = 0;
-            }
-        }
-
-
-        // Same calculation used by your existing script
-        const actualKvah = Number(kvaMD) * 120;
-
-        let powerFactor = 0;
-
-        if (actualKvah !== 0) {
-            powerFactor = actualKwh / actualKvah;
-        }
-
-
-        // Insert into MySQL
-        const [result] = await pool.query(`
-            INSERT INTO meter_readings (
-                reading_date,
-                reading_time,
-                meter,
-                kwh,
-                kvah,
-                kva_md,
-                previous_kwh,
-                actual_kwh,
-                actual_kvah,
-                power_factor
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [
-            date,
-            time,
-            meter,
-            kwh,
-            kvah,
-            kvaMD,
-            previousKwh,
-            actualKwh,
-            actualKvah,
-            powerFactor
-        ]);
-
-
-        // Return newly created record
-        return {
-            id: result.insertId,
-            date,
-            time,
-            meter,
-            kwh: Number(kwh),
-            kvah: Number(kvah),
-            kvaMD: Number(kvaMD),
-            previousKwh,
-            actualKwh,
-            actualKvah,
-            powerFactor
-        };
-    },
-
-
-    // =========================
-    // DELETE READING
-    // =========================
-    deleteMeterReading: async ({ id }) => {
-
-        const [result] = await pool.query(`
-            DELETE FROM meter_readings
-            WHERE id = ?
-        `, [id]);
-
-        return result.affectedRows > 0;
-    },
-
-
-    // =========================
-    // UPDATE READING
-    // =========================
-    updateMeterReading: async ({ id, input }) => {
-
-        const {
-            date,
-            time,
-            meter,
-            kwh,
-            kvah,
-            kvaMD
-        } = input;
-
-
-        // Find previous reading excluding current record
-        const [previousRows] = await pool.query(`
-            SELECT kwh
-            FROM meter_readings
-            WHERE meter = ?
-              AND id != ?
-            ORDER BY reading_date DESC, reading_time DESC
-            LIMIT 1
-        `, [meter, id]);
-
-
-        let previousKwh = null;
-        let actualKwh = 0;
-
-
-        if (previousRows.length > 0) {
-
-            previousKwh = Number(previousRows[0].kwh);
-
-            actualKwh = (Number(kwh) - previousKwh) * 120;
-
-            if (actualKwh < 0) {
-                actualKwh = 0;
-            }
-        }
-
-
-        const actualKvah = Number(kvaMD) * 120;
-
-        let powerFactor = 0;
-
-        if (actualKvah !== 0) {
-            powerFactor = actualKwh / actualKvah;
-        }
-
-
-        await pool.query(`
-            UPDATE meter_readings
-            SET
-                reading_date = ?,
-                reading_time = ?,
-                meter = ?,
-                kwh = ?,
-                kvah = ?,
-                kva_md = ?,
-                previous_kwh = ?,
-                actual_kwh = ?,
-                actual_kvah = ?,
-                power_factor = ?
-            WHERE id = ?
-        `, [
-            date,
-            time,
-            meter,
-            kwh,
-            kvah,
-            kvaMD,
-            previousKwh,
-            actualKwh,
-            actualKvah,
-            powerFactor,
-            id
-        ]);
-
-
-        return {
-            id,
-            date,
-            time,
-            meter,
-            kwh: Number(kwh),
-            kvah: Number(kvah),
-            kvaMD: Number(kvaMD),
-            previousKwh,
-            actualKwh,
-            actualKvah,
-            powerFactor
-        };
     }
+
 };
 
 
